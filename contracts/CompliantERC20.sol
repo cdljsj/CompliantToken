@@ -12,7 +12,8 @@ contract CompliantERC20 is ERC20 {
     uint256 public pendingComplianceId;
     uint256 public tokenHoldersCount;
     uint256 public pendingComplianceSignOffCount;
-    mapping (address => uint256) tokenHolderCompliance;
+    mapping (address => uint256) public tokenHolderCompliance;
+    mapping (address => uint256) public signOffRecord;
 
     event NewComplianceIssued(address tokenIssuer, uint256 complianceId);
     event NewComplianceSignedOff(address tokenHolder, uint256 complianceId, bool accepted);
@@ -23,13 +24,14 @@ contract CompliantERC20 is ERC20 {
         _;
     }
 
-    constructor(string memory name_, string memory symbol_, IERC721Metadata complianceNFT_, address tokenIssuer_)ERC20(name_, symbol_) {
+    constructor(string memory name_, string memory symbol_, IERC721Metadata complianceNFT_, address tokenIssuer_) ERC20 (name_, symbol_) {
         complianceNFT = complianceNFT_;
         tokenIssuer = tokenIssuer_;
     }
 
     function updateCompliance(uint256 newComplianceId) external onlyTokenIssuer {
         require(newComplianceId > 0, "Compliance id cannot be zero");
+        require(pendingComplianceId == 0, "Pending compliance exists");
         require(complianceNFT.ownerOf(newComplianceId) == tokenIssuer, "Should be issued by token issuer");
 
         // Set it directly for the first time set
@@ -77,8 +79,10 @@ contract CompliantERC20 is ERC20 {
     }
 
     function _updateComplianceStatus() private {
-        require(pendingComplianceId != 0, "Not pending compliance to decline");
-        require(balanceOf(msg.sender) > 0, "Only valid token holders could accept");
+        require(pendingComplianceId != 0, "No pending compliance to signoff");
+        require(balanceOf(msg.sender) > 0 || msg.sender == tokenIssuer, "Only valid token holders could accept");
+        require(signOffRecord[msg.sender] != pendingComplianceId, "Already signed off");
+        signOffRecord[msg.sender] = pendingComplianceId;
         pendingComplianceSignOffCount = pendingComplianceSignOffCount + 1;
         if (pendingComplianceSignOffCount == tokenHoldersCount) {
             emit ComplianceUpdated(currentComplianceId, pendingComplianceId);
@@ -91,11 +95,11 @@ contract CompliantERC20 is ERC20 {
     function _beforeTokenTransfer(address from, address to, uint256 amount) internal override virtual {
         require(pendingComplianceId == 0, "Transfer not allowed when pending compliance exists");
 
-        if (tokenHolderCompliance[from] != currentComplianceId) {
+        if (tokenHolderCompliance[from] != currentComplianceId && from != address(0)) {
             require(to == tokenIssuer, "Token holder who declines the change in terms and conditions only can transfer tokens to token issuer");
         }
         // New token holders accept the latest compliance by default
-        if (tokenHolderCompliance[to] == 0 && amount > 0) {
+        if (tokenHolderCompliance[to] == 0 && amount > 0 && to != address(0)) {
             tokenHolderCompliance[to] = currentComplianceId;
             tokenHoldersCount = tokenHoldersCount + 1;
         } else {
@@ -106,7 +110,7 @@ contract CompliantERC20 is ERC20 {
     function _afterTokenTransfer(address from, address to, uint256 amount) internal override virtual {
         to;
         amount;
-        if (balanceOf(from) == 0) {
+        if (balanceOf(from) == 0 && from != address(0)) {
             tokenHoldersCount = tokenHoldersCount - 1;
             tokenHolderCompliance[from] = 0;
         }
